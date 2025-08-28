@@ -1,4 +1,3 @@
-
 import jax
 import jax.numpy as jnp
 import equinox as eqx
@@ -18,10 +17,24 @@ def _ntk_fn(
         # Recombine to build the model for a forward pass
         return eqx.combine(p, static)(x)
 
-    def get_jacobian(p, x):
-        jac = jax.jacrev(forward_fn)(p, x)
-        leaves, _ = jax.tree_util.tree_flatten(jac)
-        return jnp.concatenate([jnp.ravel(leaf) for leaf in leaves])
+    param_leaves, _ = jax.tree_util.tree_flatten(params)
+    total_params = sum([jnp.size(leaf) for leaf in param_leaves])
+
+    x1_first = jax.tree.map(lambda x: x[0], x1)
+    test_output = forward_fn(params, x1_first)
+    output_dim = jnp.size(test_output)
+
+    if output_dim > total_params:
+        def get_jacobian(p, x):
+            jac = jax.jacfwd(forward_fn)(p, x)
+            leaves, _ = jax.tree_util.tree_flatten(jac)
+            return jnp.concatenate([jnp.ravel(leaf) for leaf in leaves])
+    else:
+        def get_jacobian(p, x):
+            jac = jax.jacrev(forward_fn)(p, x)
+            leaves, _ = jax.tree_util.tree_flatten(jac)
+            return jnp.concatenate([jnp.ravel(leaf) for leaf in leaves])
+
     J_fn = jax.vmap(get_jacobian, in_axes=(None, 0), out_axes=0)
     
     J1 = J_fn(params, x1)
@@ -108,7 +121,7 @@ def ntk_mc(
     v = jax.tree_util.tree_unflatten(p_tree, v_list)
 
     def jvp_vmap(p, x, v):
-        return jax.vmap(lambda v_slice: jvp(p, x, jax.tree_util.tree_map(lambda y: y[..., v_slice], v)), in_axes=-1)(jnp.arange(proj_dim))
+        return jax.vmap(lambda v_slice: jvp(p, x, jax.tree.map(lambda y: y[..., v_slice], v)), in_axes=-1)(jnp.arange(proj_dim))
 
     J1_proj = jax.vmap(jvp_vmap, in_axes=(None, 0, None))(params, x1, v).squeeze(-1)
 
