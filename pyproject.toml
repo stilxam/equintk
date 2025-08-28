@@ -1,0 +1,28 @@
+[project]
+name = "equintk"
+version = "0.0.1"
+description = "Neural Tangent Kernel and NNGP for Equinox modules"
+authors = [{ name = "Maxwell", email = "maxwell@example.com" }]
+license = { text = "MIT" }
+readme = "README.md"
+requires-python = ">=3.8"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+    "jax",
+    "equinox",
+    "jaxtyping",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+]
+
+[tool.setuptools]
+packages = ["equintk"]
