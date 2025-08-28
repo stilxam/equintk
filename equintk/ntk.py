@@ -119,33 +119,30 @@ def ntk_mc(
     def jvp(p, x, v):
         return jax.jvp(lambda p: forward_fn(p, x), (p,), (v,))[1]
 
-    # Create a random projection matrix
-    key, subkey = jax.random.split(key)
-    
-    # Get the shapes of the parameters
-    param_shapes = jax.tree_util.tree_map(lambda x: x.shape, params)
-    
-    # Create random vectors with the same structure as the parameters
-    v = jax.tree_util.tree_map(
-        lambda shape: jax.random.normal(subkey, shape + (proj_dim,)),
-        param_shapes
-    )
+    p_flat, p_tree = jax.tree_util.tree_flatten(params)
+    p_total_size = sum([pi.size for pi in p_flat])
 
-    def project_jacobian(p, x):
-        # Project the Jacobian onto the random vectors
-        # This is equivalent to J @ V
+    key, subkey = jax.random.split(key)
+    v_flat = jax.random.normal(subkey, (p_total_size, proj_dim))
+    
+    v_list = []
+    current_index = 0
+    for p in p_flat:
+        v_list.append(v_flat[current_index:current_index+p.size].reshape(p.shape + (proj_dim,)))
+        current_index += p.size
+    v = jax.tree_util.tree_unflatten(p_tree, v_list)
+
+    def jvp_vmap(p, x, v):
         return jax.vmap(lambda v_slice: jvp(p, x, jax.tree_util.tree_map(lambda y: y[..., v_slice], v)), in_axes=-1)(jnp.arange(proj_dim))
 
-    J_proj_fn = jax.vmap(project_jacobian, in_axes=(None, 0), out_axes=0)
+    J1_proj = jax.vmap(jvp_vmap, in_axes=(None, 0, None))(params, x1, v).squeeze(-1)
 
-    J1_proj = J_proj_fn(params, x1)
-    
     if x2 is None:
         J2_proj = J1_proj
     else:
-        J2_proj = J_proj_fn(params, x2)
-        
+        J2_proj = jax.vmap(jvp_vmap, in_axes=(None, 0, None))(params, x2, v).squeeze(-1)
+
     # The approximated NTK is (J @ V) @ (J @ V).T
-    kernel = J1_proj @ J2_proj.T
+    kernel = (J1_proj @ J2_proj.T) / proj_dim
     
     return kernel
