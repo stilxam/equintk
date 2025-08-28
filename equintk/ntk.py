@@ -2,76 +2,112 @@ import jax
 import jax.numpy as jnp
 import equinox as eqx
 from jaxtyping import Array, Float, PRNGKeyArray
-from typing import Optional
+from typing import Optional, Callable
+from functools import partial
 
-def _ntk_fn(
-    model: eqx.Module,
-    x1: Float[Array, "batch1 *dims"],
-    x2: Optional[Float[Array, "batch2 *dims"]] = None,
+
+@eqx.filter_jit
+def _ntk_fn_single_batch(
+        model: eqx.Module,
+        x1: Float[Array, "batch1 *dims"],
+        x2: Optional[Float[Array, "batch2 *dims"]] = None,
 ) -> Float[Array, "batch1 batch2"]:
-    """Computes the Neural Tangent Kernel (NTK) of an Equinox model."""
-    
+    """Core function to compute the NTK for a single batch using jnp.einsum."""
     params, static = eqx.partition(model, eqx.is_array)
 
     def forward_fn(p, x):
-        # Recombine to build the model for a forward pass
         return eqx.combine(p, static)(x)
 
     param_leaves, _ = jax.tree_util.tree_flatten(params)
     total_params = sum([jnp.size(leaf) for leaf in param_leaves])
-
     x1_first = jax.tree.map(lambda x: x[0], x1)
-    test_output = forward_fn(params, x1_first)
-    output_dim = jnp.size(test_output)
+    output_dim = jnp.size(forward_fn(params, x1_first))
 
-    if output_dim > total_params:
-        def get_jacobian(p, x):
-            jac = jax.jacfwd(forward_fn)(p, x)
-            leaves, _ = jax.tree_util.tree_flatten(jac)
-            return jnp.concatenate([jnp.ravel(leaf) for leaf in leaves])
-    else:
-        def get_jacobian(p, x):
-            jac = jax.jacrev(forward_fn)(p, x)
-            leaves, _ = jax.tree_util.tree_flatten(jac)
-            return jnp.concatenate([jnp.ravel(leaf) for leaf in leaves])
+    jac_fn = jax.jacfwd(forward_fn) if output_dim > total_params else jax.jacrev(forward_fn)
+
+    def get_jacobian(p, x):
+        jac = jac_fn(p, x)
+        leaves, _ = jax.tree_util.tree_flatten(jac)
+        return jnp.concatenate([jnp.ravel(leaf) for leaf in leaves])
 
     J_fn = jax.vmap(get_jacobian, in_axes=(None, 0), out_axes=0)
-    
+
     J1 = J_fn(params, x1)
-    
-    if x2 is None:
-        J2 = J1
-    else:
-        J2 = J_fn(params, x2)
+    J2 = J1 if x2 is None else J_fn(params, x2)
 
-    kernel = J1 @ J2.T
-    
-    return kernel
+    return jnp.einsum('bp,cp->bc', J1, J2)
 
-_jitted_ntk = eqx.filter_jit(_ntk_fn)
+
+@eqx.filter_jit
+def _ntk_scan(
+        model: eqx.Module,
+        x1: Float[Array, "batch1 *dims"],
+        x2: Float[Array, "batch2 *dims"],
+        batch_size_x1: int,
+        batch_size_x2: int,
+) -> Float[Array, "batch1 batch2"]:
+    """JIT-compilable function to compute the NTK block-by-block using lax.scan."""
+    n1, n2 = x1.shape[0], x2.shape[0]
+
+    def compute_row_of_blocks(x1_batch):
+        def scan_body_for_cols(carry, j):
+            x2_batch = jax.lax.dynamic_slice(x2, (j, *([0] * (x2.ndim - 1))), (batch_size_x2, *x2.shape[1:]))
+            return carry, _ntk_fn_single_batch(model, x1_batch, x2_batch)
+
+        j_steps = jnp.arange(0, n2, batch_size_x2)
+        _, kernel_blocks = jax.lax.scan(scan_body_for_cols, None, j_steps)
+        return jnp.concatenate(kernel_blocks, axis=1)
+
+    def scan_body_for_rows(carry, i):
+        x1_batch = jax.lax.dynamic_slice(x1, (i, *([0] * (x1.ndim - 1))), (batch_size_x1, *x1.shape[1:]))
+        return carry, compute_row_of_blocks(x1_batch)
+
+    i_steps = jnp.arange(0, n1, batch_size_x1)
+    _, kernel_rows = jax.lax.scan(scan_body_for_rows, None, i_steps)
+
+    return jnp.concatenate(kernel_rows, axis=0)
+
+
 
 def ntk(
-    model: eqx.Module,
-    x1: Float[Array, "batch1 *dims"],
-    x2: Optional[Float[Array, "batch2 *dims"]] = None,
+        model: eqx.Module,
+        x1: Float[Array, "batch1 *dims"],
+        x2: Optional[Float[Array, "batch2 *dims"]] = None,
+        batch_size: int = 32,
 ) -> Float[Array, "batch1 batch2"]:
     """
-    Computes the Neural Tangent Kernel (NTK) of an Equinox model.
+    Computes the exact empirical NTK using a JIT-compiled batching loop (`lax.scan`).
 
-    The NTK is defined as `J(x₁)^T J(x₂)` where `J(x)` is the Jacobian of the 
-    model's output with respect to its parameters. This implementation computes
-    the empirical NTK for a finite-width network.
+    This version is memory-efficient, fast, and numerically robust. It handles
+    large inputs by processing them in batches on-device and explicitly enforces
+    the symmetry of the kernel matrix when `x2` is not provided.
 
     Args:
         model: The Equinox model (e.g., `eqx.nn.MLP`).
-        x1: A batch of input data with shape `(batch1, *dims)`.
-        x2: An optional second batch of input data with shape `(batch2, *dims)`.
-            If not provided, the kernel of `x1` with itself is computed.
+        x1: A batch of input data.
+        x2: An optional second batch of input data. If None, the kernel of `x1`
+            with itself is computed.
+        batch_size: The size of the micro-batches. A smaller size reduces
+            memory usage at the cost of potential performance.
 
     Returns:
         The empirical NTK matrix of shape `(batch1, batch2)`.
     """
-    return _jitted_ntk(model, x1, x2)
+    is_symmetric = x2 is None
+    _x2 = x1 if is_symmetric else x2
+    n1_orig, n2_orig = x1.shape[0], _x2.shape[0]
+
+    pad1 = (batch_size - (n1_orig % batch_size)) % batch_size
+    pad2 = (batch_size - (n2_orig % batch_size)) % batch_size
+    x1_padded = jnp.pad(x1, [(0, pad1)] + [(0, 0)] * (x1.ndim - 1))
+    x2_padded = jnp.pad(_x2, [(0, pad2)] + [(0, 0)] * (_x2.ndim - 1))
+
+    kernel_padded = _ntk_scan(model, x1_padded, x2_padded, batch_size, batch_size)
+
+    if is_symmetric:
+        kernel_padded = jnp.triu(kernel_padded) + jnp.triu(kernel_padded, k=1).T
+
+    return kernel_padded[:n1_orig, :n2_orig]
 
 def ntk_mc(
     model: eqx.Module,
