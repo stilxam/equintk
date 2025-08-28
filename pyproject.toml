@@ -2,10 +2,10 @@
 name = "equintk"
 version = "0.0.1"
 description = "Neural Tangent Kernel and NNGP for Equinox modules"
-authors = [{ name = "Maxwell", email = "maxwell@example.com" }]
+authors = [{ name = "Maxwell Litsios", email = "m.l.h.litsios@student.tue.nl" }]
 license = { text = "MIT" }
 readme = "README.md"
-requires-python = ">=3.8"
+requires-python = ">=3.12"
 classifiers = [
     "Programming Language :: Python :: 3",
     "License :: OSI Approved :: MIT License",
