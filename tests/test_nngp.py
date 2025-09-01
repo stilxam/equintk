@@ -27,7 +27,6 @@ class MLP(eqx.Module):
 def get_model_and_data():
     key = jax.random.PRNGKey(0)
     model_key, data_key = jax.random.split(key)
-    # model needs to be a function that accepts a key
     model = MLP
     
     x1 = jax.random.normal(data_key, (10, 2))
@@ -61,7 +60,6 @@ def test_known_value_linear_model():
     """For a trivial linear model y = w*x, the NNGP is simply x1 * x2.T."""
     key = jax.random.PRNGKey(42)
     
-    # A simple linear model with one parameter
     class LinearModel(eqx.Module):
         weight: jnp.ndarray
 
@@ -69,13 +67,10 @@ def test_known_value_linear_model():
             self.weight = jax.random.normal(key, (1,))
 
         def __call__(self, x):
-            # The model should return a scalar for the NTK calculation.
-            # We'll assume the input `x` is a scalar for simplicity.
             return self.weight * x[0]
 
     model = LinearModel
     
-    # Create some scalar data
     x1 = jax.random.normal(key, (3, 1))
     x2 = jax.random.normal(key, (4, 1))
 
@@ -83,7 +78,6 @@ def test_known_value_linear_model():
     # If w ~ N(0, 1), then E[w^2] = 1
     expected_kernel = x1 @ x2.T
     
-    # Calculate the NNGP using the library
     actual_kernel = nngp(model, key, x1, x2)
     
     assert jnp.allclose(expected_kernel, actual_kernel, atol=1e-1)

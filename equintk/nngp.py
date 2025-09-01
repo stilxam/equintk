@@ -38,7 +38,6 @@ def nngp(
         x2 = x1
 
     def sample_once(key):
-        # Create a new model with random parameters
         pkey, mkey = jax.random.split(key)
         new_model = model(key=mkey)
 

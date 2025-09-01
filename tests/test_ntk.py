@@ -65,21 +65,15 @@ def test_known_value_linear_model():
             self.weight = jnp.ones((1,))
 
         def __call__(self, x):
-            # The model should return a scalar for the NTK calculation.
-            # We'll assume the input `x` is a scalar for simplicity.
             return self.weight * x[0]
 
     model = LinearModel()
     
-    # Create some scalar data
     x1 = jax.random.normal(key, (3, 1))
     x2 = jax.random.normal(key, (4, 1))
 
-    # The NTK of f(x) = w*x is df/dw * df/dw = x*x
-    # For two inputs, the kernel is (x1)(x2.T)
     expected_kernel = x1 @ x2.T
     
-    # Calculate the NTK using the library
     actual_kernel = ntk(model, x1, x2)
     
     assert jnp.allclose(expected_kernel, actual_kernel, atol=1e-6)
@@ -125,19 +119,15 @@ def multi_output_setup():
     key = jax.random.PRNGKey(0)
     mkey, dkey = jax.random.split(key)
 
-    # Define parameters for the test
     in_dim = 10
-    out_dim = 2  # Crucially, we are testing a multi-output scenario
-    n_samples = 75  # Not a multiple of batch_size to test padding logic
+    out_dim = 2
+    n_samples = 75
     batch_size = 32
 
-    # Create a simple MLP model with the specified output dimension
     model = eqx.nn.MLP(in_size=in_dim, out_size=out_dim, width_size=50, depth=2, key=mkey)
 
-    # Create random input data
     x = jax.random.normal(dkey, (n_samples, in_dim))
 
-    # Yield the setup to the test functions
     yield model, x, batch_size
 
 def test_symmetric_multi_output(multi_output_setup):
@@ -148,16 +138,12 @@ def test_symmetric_multi_output(multi_output_setup):
     model, x, batch_size = multi_output_setup
     n_samples = x.shape[0]
 
-    # 1. Compute the kernel using the optimized symmetric path by setting x2=None
     kernel_symmetric = ntk(model, x, x2=None, batch_size=batch_size)
 
-    # 2. Assert that the output has the correct shape and is symmetric
     assert kernel_symmetric.shape == (n_samples, n_samples)
     assert jnp.allclose(kernel_symmetric, kernel_symmetric.T, atol=1e-5), "Kernel must be symmetric"
 
-    # 3. For validation, compute the kernel using the non-symmetric ("brute-force") path
     kernel_brute_force = ntk(model, x, x, batch_size=batch_size)
 
-    # 4. Assert that the optimized result is numerically identical to the brute-force result
     assert jnp.allclose(kernel_symmetric, kernel_brute_force, atol=1e-5),\
         "The optimized symmetric implementation does not match the non-symmetric one."
