@@ -11,13 +11,6 @@
 
     flake-utils.lib.eachDefaultSystem (system:
       let
-        # Read the hostname and remove the trailing newline.
-        # This is an impure operation but common for personal configurations.
-        # It allows the flake to adapt to the machine it's running on.
-
-        # Set a boolean to true only if the hostname matches your desktop.
-
-        # Configure nixpkgs, enabling CUDA support only when cudaEnabled is true.
         pkgs = import nixpkgs {
           inherit system;
           config = {
@@ -35,12 +28,8 @@
 
         python = pkgs.python312;
 
-        # Conditionally define the cudatoolkit package.
-        # It will be 'null' on systems without CUDA.
         cudatoolkit = pkgs.cudatoolkit;
 
-        # Conditionally create the environment hook for CUDA.
-        # It will be an empty string if CUDA is not enabled.
         cudaEnvHook = ''
           export CUDA_HOME=${cudatoolkit}
           export CUDA_ROOT=${cudatoolkit}
@@ -51,13 +40,15 @@
 
 
         mainPythonPackages = ps: with ps; [
-          cython
-	  pytest
-	  pip
-          jax
-          jaxlib
-	  equinox
-          jaxtyping
+            cython
+            pytest
+            pip
+            jax
+            jaxlib
+            equinox
+            jaxtyping
+            matplotlib
+            seaborn
         ];
 
         pythonEnv = python.withPackages mainPythonPackages;
@@ -65,8 +56,6 @@
       in
       {
         devShells.default = pkgs.mkShell {
-          # Conditionally add CUDA toolkit to the shell's build inputs.
-          # pkgs.lib.optionals adds the list of packages only if cudaEnabled is true. [2]
           buildInputs = [
             pythonEnv
 	    cudatoolkit
