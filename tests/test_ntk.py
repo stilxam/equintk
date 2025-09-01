@@ -1,4 +1,3 @@
-
 import jax
 import jax.numpy as jnp
 import equinox as eqx
@@ -116,3 +115,49 @@ def test_mc_approximation(get_model_and_data):
     kernel_mc = ntk_mc(model, key, x1, x2, proj_dim=1000)
     
     assert jnp.allclose(kernel_exact, kernel_mc, atol=5e-1)
+
+@pytest.fixture(scope="class")
+def multi_output_setup():
+    """
+    A pytest fixture to create a multi-output model and test data.
+    This setup is created once per test class, making tests faster.
+    """
+    key = jax.random.PRNGKey(0)
+    mkey, dkey = jax.random.split(key)
+
+    # Define parameters for the test
+    in_dim = 10
+    out_dim = 2  # Crucially, we are testing a multi-output scenario
+    n_samples = 75  # Not a multiple of batch_size to test padding logic
+    batch_size = 32
+
+    # Create a simple MLP model with the specified output dimension
+    model = eqx.nn.MLP(in_size=in_dim, out_size=out_dim, width_size=50, depth=2, key=mkey)
+
+    # Create random input data
+    x = jax.random.normal(dkey, (n_samples, in_dim))
+
+    # Yield the setup to the test functions
+    yield model, x, batch_size
+
+def test_symmetric_multi_output(multi_output_setup):
+    """
+    Tests the symmetric case (x2=None) for a multi-output model.
+    It confirms shape, symmetry, and correctness against the non-symmetric path.
+    """
+    model, x, batch_size = multi_output_setup
+    n_samples = x.shape[0]
+
+    # 1. Compute the kernel using the optimized symmetric path by setting x2=None
+    kernel_symmetric = ntk(model, x, x2=None, batch_size=batch_size)
+
+    # 2. Assert that the output has the correct shape and is symmetric
+    assert kernel_symmetric.shape == (n_samples, n_samples)
+    assert jnp.allclose(kernel_symmetric, kernel_symmetric.T, atol=1e-5), "Kernel must be symmetric"
+
+    # 3. For validation, compute the kernel using the non-symmetric ("brute-force") path
+    kernel_brute_force = ntk(model, x, x, batch_size=batch_size)
+
+    # 4. Assert that the optimized result is numerically identical to the brute-force result
+    assert jnp.allclose(kernel_symmetric, kernel_brute_force, atol=1e-5),\
+        "The optimized symmetric implementation does not match the non-symmetric one."
