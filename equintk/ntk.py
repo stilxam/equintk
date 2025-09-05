@@ -109,7 +109,7 @@ def ntk(
 
     return kernel_padded[:n1_orig, :n2_orig]
 
-def ntk_mc(
+def mc_ntk(
     model: eqx.Module,
     key: PRNGKeyArray,
     x1: Float[Array, "batch1 *dims"],
@@ -147,8 +147,9 @@ def ntk_mc(
     p_total_size = sum([pi.size for pi in p_flat])
 
     key, subkey = jax.random.split(key)
-    v_flat = jax.random.normal(subkey, (p_total_size, proj_dim))
     
+    v_flat = jax.random.normal(subkey, (p_total_size, proj_dim))
+
     v_list = []
     current_index = 0
     for p in p_flat:
@@ -156,16 +157,30 @@ def ntk_mc(
         current_index += p.size
     v = jax.tree_util.tree_unflatten(p_tree, v_list)
 
-    def jvp_vmap(p, x, v):
-        return jax.vmap(lambda v_slice: jvp(p, x, jax.tree.map(lambda y: y[..., v_slice], v)), in_axes=-1)(jnp.arange(proj_dim))
+    def compute_jacobian_projections(x_batch):
+        def single_jvp(v_idx):
+            v_slice = jax.tree.map(lambda y: y[..., v_idx], v)
+            
+            jvps = jax.vmap(lambda x: jvp(params, x, v_slice))(x_batch)
+            
+            return jvps.reshape(jvps.shape[0], -1)
 
-    J1_proj = jax.vmap(jvp_vmap, in_axes=(None, 0, None))(params, x1, v).squeeze(-1)
+        
+        jac_projs = jax.vmap(single_jvp)(jnp.arange(proj_dim))  
+        return jnp.transpose(jac_projs, (1, 0, 2))  
+
+    J1_proj = compute_jacobian_projections(x1)  
 
     if x2 is None:
         J2_proj = J1_proj
     else:
-        J2_proj = jax.vmap(jvp_vmap, in_axes=(None, 0, None))(params, x2, v).squeeze(-1)
+        J2_proj = compute_jacobian_projections(x2)  
 
-    kernel = (J1_proj @ J2_proj.T) / proj_dim
     
+    J1_flat = J1_proj.reshape(J1_proj.shape[0], -1)  
+    J2_flat = J2_proj.reshape(J2_proj.shape[0], -1)  
+
+    
+    kernel = jnp.dot(J1_flat, J2_flat.T) / proj_dim
+
     return kernel

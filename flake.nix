@@ -49,6 +49,7 @@
             jaxtyping
             matplotlib
             seaborn
+            notebook
         ];
 
         pythonEnv = python.withPackages mainPythonPackages;
