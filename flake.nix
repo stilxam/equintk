@@ -50,6 +50,7 @@
             matplotlib
             seaborn
             notebook
+	    optax
         ];
 
         pythonEnv = python.withPackages mainPythonPackages;
